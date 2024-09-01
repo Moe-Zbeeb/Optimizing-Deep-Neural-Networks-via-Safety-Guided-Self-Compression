@@ -1,2 +1,2 @@
 # Compressing-Neural-Nets
-A Repo Solving the research problem of letting neural network determine thier optimal size 
+A Repo solving the research problem of letting neural network determine thier optimal size.
