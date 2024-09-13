@@ -1,6 +1,9 @@
 # Safety-Driven Self-Compressing Neural Networks
 
 This project explores a **simple and general neural network weight compression approach**. The core concept is to represent the network parameters (weights and biases) in a **latent space**, effectively reparameterizing the model. The ultimate goal is to significantly reduce the model's size while preserving its performance and generalizability.
+---
+
+**Note:** This README serves as a living document to track the development of ideas and progress throughout the project.
 
 ---
 
@@ -26,4 +29,3 @@ By combining these three techniques, we obtained a safety set that includes **di
 
 ---
 
-**Note:** This README serves as a living document to track the development of ideas and progress throughout the project.
