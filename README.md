@@ -7,7 +7,7 @@ This project explores a **simple and general neural network weight compression a
 
 ---
 
-## Choosing the Safety Set: Algorithm Overview
+## Choosing the Safety Set: Algorithm Ensembling
 
 The process of selecting the **safety set** involved an ensemble of three distinct algorithms. This approach ensures that the selected images from the **CIFAR-10 dataset** are **diverse**, **challenging**, and **representative**. Here's a breakdown of the methodology:
 
