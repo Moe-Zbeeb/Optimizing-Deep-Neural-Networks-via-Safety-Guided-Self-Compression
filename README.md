@@ -10,7 +10,7 @@ This project explores a **simple and general neural network weight compression a
 ## Choosing the Safety Set: Algorithm Ensembling
 [Safet Set living here](https://mailaub-my.sharepoint.com/:f:/r/personal/mbz02_mail_aub_edu/Documents/safet_set?csf=1&web=1&e=UftuGF)
 
-The process of selecting the **safety set** involved an ensemble of three distinct algorithms. This approach ensures that the selected images from the **CIFAR-10 dataset** are **diverse**, **challenging**, and **representative**. Here's a breakdown of the methodology: 
+The process of selecting the **safety set** involved an ensemble of three distinct algorithms. This approach ensures that the selected images from the **MNIST dataset** are **diverse**, **challenging**, and **representative**. Here's a breakdown of the methodology: 
 
 ---  
 
@@ -31,7 +31,7 @@ The process of selecting the **safety set** involved an ensemble of three distin
 
 ---
 
-By combining these three techniques, we obtained a safety set that includes **diverse**, **challenging**, and **critical** examples. This safety set is designed to ensure that the compressed model retains its performance across a wide range of scenarios from the **CIFAR-10 dataset**.
+By combining these three techniques, we obtained a safety set that includes **diverse**, **challenging**, and **critical** examples. This safety set is designed to ensure that the compressed model retains its performance across a wide range of scenarios from the **MNIST dataset**.
 
 ---
 
