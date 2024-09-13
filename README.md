@@ -10,7 +10,9 @@ This project explores a **simple and general neural network weight compression a
 ## Choosing the Safety Set: Algorithm Ensembling
 [Safet set is living here](https://mailaub-my.sharepoint.com/:f:/r/personal/mbz02_mail_aub_edu/Documents/safet_set?csf=1&web=1&e=UftuGF)
 The process of selecting the **safety set** involved an ensemble of three distinct algorithms. This approach ensures that the selected images from the **CIFAR-10 dataset** are **diverse**, **challenging**, and **representative**. Here's a breakdown of the methodology:
+**Note:** This is an inference Mode Algorithm
 
+---
 ### 1. **Grad-CAM (Gradient-weighted Class Activation Mapping)**
    - We applied **Grad-CAM** to rank images based on the importance of the input regions that the model relied on for its predictions.
    - The images selected were those where the model's prediction was influenced by **critical features**, i.e., regions of the image that played a significant role in the decision-making process.
