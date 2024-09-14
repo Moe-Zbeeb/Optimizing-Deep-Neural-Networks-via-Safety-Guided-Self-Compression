@@ -110,7 +110,7 @@ Where:
        else:
            test_acc = test_accs[-1] if test_accs else 0.0
 
-       # Step 4: Log test accuracy, model size, and safety loss
+       # Step 4: Log test accuracy, model size, and safetyloss
        test_accs.append(test_acc)
        bytes_used.append(model_bytes)
        safety_losses.append(safety_loss)
