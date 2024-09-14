@@ -64,3 +64,56 @@ Where:
 - **Q**: Avergae size in bytes of neural net 
 - **λ**: A regularization parameter controlling the importance of the safety set.
 - **safety_loss**: A penalty term for evaluating model performance on a predefined safety set.
+---  
+## Training Loop  
+## Safe Quantization Training Loop Pseudocode
+
+1. **Initialize Variables:**
+   - Set `prev_safety_acc` to `None`
+   - Set `safety_acc_drop_threshold` to a predefined value (e.g., 5.0 for 5% drop in accuracy)
+   - Initialize lists to track `test_accs`, `bytes_used`, and `safety_losses`
+   - Calculate `initial_safety_acc` as the starting accuracy on the safety set.
+   - Assign `prev_safety_acc` to `initial_safety_acc`.
+
+2. **Training Loop (4000 iterations):**
+
+   ```python
+   for i in range(4000):
+       # Step 1: Perform a training step
+       loss, Q, safety_loss = train_step()
+
+       # Step 2: Calculate model size in bytes based on quantized bits
+       model_bytes = Q / 8 * weight_count
+
+       # Step 3: Every 10 iterations:
+       if i % 10 == 9:
+           # Step 3.1: Calculate test accuracy
+           test_acc = get_test_acc()
+
+           # Step 3.2: Calculate accuracy on safety set
+           safety_acc = get_safety_acc()
+
+           # Step 3.3: Compute accuracy drop from the previous safety evaluation
+           acc_drop = prev_safety_acc - safety_acc
+
+           # Step 3.4: If the drop exceeds the threshold
+           if acc_drop > safety_acc_drop_threshold:
+               # Step 3.5: Check for kernels with zero bits
+               if check_zero_bit_kernels():
+                   # Step 3.6: Restore kernels with zero bits (e.g., restore 50% of them)
+                   restore_zero_bit_kernels(restore_fraction=0.5)
+
+           # Step 3.7: Update the previous safety accuracy to the current one
+           prev_safety_acc = safety_acc
+
+       # Else: Use the previous test accuracy
+       else:
+           test_acc = test_accs[-1] if test_accs else 0.0
+
+       # Step 4: Log test accuracy, model size, and safety loss
+       test_accs.append(test_acc)
+       bytes_used.append(model_bytes)
+       safety_losses.append(safety_loss)
+---
+
+
