@@ -51,7 +51,8 @@ Where:
 - **e**: Exponent used for scaling (learnable)
 ---  
 ## Loss Function  
-The overall loss function is given by:
+The overall loss function is given by: 
+
 $$
 Λ(x) = Λ₀(x) + γ * Q + λ * safety_loss  
 $$
