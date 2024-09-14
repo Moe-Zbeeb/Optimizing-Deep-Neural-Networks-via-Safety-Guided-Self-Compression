@@ -29,7 +29,7 @@ The process of selecting the **safety set** involved an ensemble of three distin
 
 ### 3. **Clustering for Diversity**
    - To ensure that the safety set was **representative of the full feature space**, we applied a clustering algorithm.
-   - We projected the embeddings from the **last convolutional layer** of the model into a lower-dimensional space and performed **K-Means clustering**. From each cluster, we selected an equal number of images, ensuring that the safety set is diverse and representative of various patterns in the dataset.
+   - We projected the embeddings from the **last convolutional layer** of the model into a lower-dimensional space and performed **K-Means clustering**. From each cluster, we selected an equal number of images, ensuring that the safety set is diverse and representative of various patterns in the dataset
 
 ---
 
@@ -126,5 +126,7 @@ Here’s a table summarizing the performance and model size with and without qua
 ### Explanation:
 1. **Without Quantization**: The original model without any quantization yields a high accuracy of 98.6%, but the model size is relatively large at 35 bytes.
 2. **Unsafe Quantization**: When applying quantization without safety measures, the model size decreases significantly to 20 bytes, but test accuracy drops to 97%.
-3. **Safety-Driven Quantization**: By applying safety-driven quantization methods, the model maintains a high accuracy of 99.5%, while still reducing the model size to 23 bytes. This approach achieves a balance between compression and accuracy.
+3. **Safety-Driven Quantization**: By applying safety-driven quantization methods, the model maintains a high accuracy of 99.5%, while still reducing the model size to 23 bytes. This approach achieves a balance between compression and accuracy
+---  
+**Note:** Interesting how we got better accuracy even than the baseline model which shows that (interpreting) is that taking the unimportant kernels and restoring important ones helped the model eliminate further variance making it closer to the human level performance which is about 99.87% 
 
