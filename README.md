@@ -114,6 +114,15 @@ Where:
        test_accs.append(test_acc)
        bytes_used.append(model_bytes)
        safety_losses.append(safety_loss)
+
+3. **Pseudocode**
+      1. Pass the safet set and log accuracy
+      2. pass the training examples at hand
+      3. update parameters including b and e
+      4. quantize the network's size
+      5. pass safety set and log accuracy
+      6. if accuracy is affected by much restore bits thier original half precision
+      7. iterate 
 ---
 Here’s a table summarizing the performance and model size with and without quantization, including unsafe and safety-driven quantization:
 
