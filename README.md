@@ -52,8 +52,9 @@ Where:
 ---  
 ## Loss Function  
 The overall loss function is given by:
-
-**Λ(x) = Λ₀(x) + γ * Q + λ * safety_loss**
+$$
+Λ(x) = Λ₀(x) + γ * Q + λ * safety_loss  
+$$
 
 Where:
 
