@@ -61,7 +61,7 @@ Where:
 
 - **Λ₀(x)**: The original loss function (e.g., cross-entropy loss).
 - **γ**: A regularization parameter for controlling the compression-accuracy tradeoff.
-- **Q**: Avergae size in bytes of neural net 
+- **Q**: Average size in bytes of neural net 
 - **λ**: A regularization parameter controlling the importance of the safety set.
 - **safety_loss**: A penalty term for evaluating model performance on a predefined safety set.
 ---  
