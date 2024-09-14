@@ -4,7 +4,6 @@ This project explores a **simple and general neural network weight compression a
 ---
 
 **Note1**  This README serves as a blog to track the development of ideas and progress throughout the project.
-**Note2**  The work is built upon self compressing neural networks by Szabolcs Cséfalvay and James Imber paper submittted in 2023 
 ---
 
 ## Choosing the Safety Set: Algorithm Ensembling
