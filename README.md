@@ -51,14 +51,14 @@ Where:
 - **e**: Exponent used for scaling (learnable)
 ---  
 ## Loss Function  
-$$
-\Lambda(x) = \Lambda_0(x) + \gamma \cdot Q + \lambda \cdot \text{safety\_loss}
-$$
+The overall loss function is given by:
+
+**Λ(x) = Λ₀(x) + γ * Q + λ * safety_loss**
 
 Where:
 
-- **$\Lambda_0(x)$**: The original loss function (e.g., cross-entropy loss).
-- **$\gamma$**: A regularization parameter for controlling the compression-accuracy tradeoff.
-- **$Q$**: The quantization loss term.
-- **$\lambda$**: A regularization parameter controlling the importance of the safety set.
-- **$\text{safety\_loss}$**: A penalty term for evaluating model performance on a predefined safety set.
+- **Λ₀(x)**: The original loss function (e.g., cross-entropy loss).
+- **γ**: A regularization parameter for controlling the compression-accuracy tradeoff.
+- **Q**: The quantization loss term.
+- **λ**: A regularization parameter controlling the importance of the safety set.
+- **safety_loss**: A penalty term for evaluating model performance on a predefined safety set.
