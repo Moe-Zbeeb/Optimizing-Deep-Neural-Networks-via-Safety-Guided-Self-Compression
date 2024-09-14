@@ -36,4 +36,17 @@ The process of selecting the **safety set** involved an ensemble of three distin
 By combining these three techniques, we obtained a safety set that includes **diverse**, **challenging**, and **critical** examples. This safety set is designed to ensure that the compressed model retains its performance across a wide range of scenarios from the **MNIST dataset**.
 
 ---
+## Quantization Functon  
 
+The quantization function is defined as:
+
+$$
+q(x, b, e) = 2^{e} \left\lfloor \min\left(\max\left(2^{-e} \cdot x, -2^{b-1}\right), 2^{b-1} - 1 \right)\right\rfloor
+$$
+
+Where:
+
+- **x**: Input data
+- **b**: Bit depth used for quantization(learnable) 
+- **e**: Exponent used for scaling (learnable)
+--- 
