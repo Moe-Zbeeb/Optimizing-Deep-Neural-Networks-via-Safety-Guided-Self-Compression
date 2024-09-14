@@ -51,9 +51,6 @@ Where:
 - **e**: Exponent used for scaling (learnable)
 ---  
 ## Loss Function  
-
-The overall loss function is given by:
-
 $$
 \Lambda(x) = \Lambda_0(x) + \gamma \cdot Q + \lambda \cdot \text{safety\_loss}
 $$
