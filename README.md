@@ -47,6 +47,6 @@ $$
 Where:
 
 - **x**: Input data
-- **b**: Bit depth used for quantization(learnable) 
+- **b**: Bit depth used for quantization (learnable) 
 - **e**: Exponent used for scaling (learnable)
 --- 
