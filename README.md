@@ -121,7 +121,7 @@ Where:
       3. update parameters including b and e
       4. quantize the network's size
       5. pass safety set and log accuracy
-      6. if accuracy is affected by much restore bits thier original half precision
+      6. if accuracy is affected by much, restore bits their original half precision
       7. iterate 
 ---
 Here’s a table summarizing the performance and model size with and without quantization, including unsafe and safety-driven quantization:
