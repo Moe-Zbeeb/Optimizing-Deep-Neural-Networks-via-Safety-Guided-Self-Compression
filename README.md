@@ -51,7 +51,8 @@ Where:
 - **e**: Exponent used for scaling (learnable)
 ---  
 ## Loss Function  
-The overall loss function is defined as:
+
+The overall loss function is given by:
 
 $$
 \Lambda(x) = \Lambda_0(x) + \gamma \cdot Q + \lambda \cdot \text{safety\_loss}
@@ -59,10 +60,8 @@ $$
 
 Where:
 
-- **$\Lambda_0(x)$**: The original loss (e.g., cross-entropy loss).
-- **$\gamma$**: A regularization parameter that controls the trade-off between accuracy and compression.
-- **$Q$**: Quantization loss, which is based on the number of bits used for weights.
-- **$\lambda$**: A regularization term that balances the safety loss.
-- **$\text{safety\_loss}$**: A term that measures the performance drop on a preselected "safety set" (critical examples). This ensures the network does not degrade in accuracy on important data points when compressed.
-
-The **safety loss** helps to maintain accuracy on the most critical examples, particularly when aggressive compression is applied.
+- **$\Lambda_0(x)$**: The original loss function (e.g., cross-entropy loss).
+- **$\gamma$**: A regularization parameter for controlling the compression-accuracy tradeoff.
+- **$Q$**: The quantization loss term.
+- **$\lambda$**: A regularization parameter controlling the importance of the safety set.
+- **$\text{safety\_loss}$**: A penalty term for evaluating model performance on a predefined safety set.
