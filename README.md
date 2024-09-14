@@ -33,7 +33,7 @@ The process of selecting the **safety set** involved an ensemble of three distin
 
 ---
 
-By combining these three techniques, we obtained a safety set that includes **diverse**, **challenging**, and **critical** examples. This safety set is designed to ensure that the compressed model retains its performance across a wide range of scenarios from the **MNIST dataset**.
+By combining these three techniques, we obtained a safety set that includes **diverse**, **challenging**, and **critical** examples. This safety set is designed to ensure that the compressed model retains its performance across a wide range of scenarios from the **MNIST dataset** and **CIFAR10 dataset**
 
 ---
 ## Quantization Functon  
