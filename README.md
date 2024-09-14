@@ -3,7 +3,8 @@
 This project explores a **simple and general neural network weight compression approach**. The core concept is to represent the network parameters weights and biases as well as the compression parameters in a **latent space**, effectively reparameterizing the model. The ultimate goal is to significantly reduce the model's size while preserving its performance and generalizability.
 ---
 
-**Note1**  This README serves as a blog to track the development of ideas and progress throughout the project.
+**Note1**  : This README serves as a blog to track the development of ideas and progress throughout the project.  
+**Note2**  : This work is built upon self compressing neural network by Szabolcs Cséfalvay szabolcs.csefalvay@imgtec.com James Imber james.imber@imgtec.com
 ---
 
 ## Choosing the Safety Set: Algorithm Ensembling
