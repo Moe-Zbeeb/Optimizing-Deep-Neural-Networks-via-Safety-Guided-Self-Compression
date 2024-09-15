@@ -138,9 +138,13 @@ Here’s a table summarizing the performance and model size with and without qua
 1. **Without Quantization**: The original model without any quantization yields a high accuracy of 98.6%, but the model size is relatively large at 35 bytes.
 2. **Unsafe Quantization**: When applying quantization without safety measures, the model size decreases significantly to 20 bytes, but test accuracy drops to 97%.
 3. **Safety-Driven Quantization**: By applying safety-driven quantization methods, the model maintains a high accuracy of 99.5%, while still reducing the model size to 23 bytes. This approach achieves a balance between compression and accuracy
----  
+---    
+
 **Note** : The improvement beyond the baseline suggests that removing unimportant kernels while restoring critical ones helped the model reduce variance and better focus on key features, resulting in a performance boost closer to human-level 
-accuracy which is about 99.87% 
+accuracy which is about 99.87%  
+
 --- 
-Mohammad Zbeeb, mhmdzbyb829@gmail.com
+Mohammad Bazzi, mab101@mail.aub.edu  
+Mariam Salman, mcs12@mail.aub.edu 
+Mohammad Zbeeb, mhmdzbyb829@gmail.com 
 
