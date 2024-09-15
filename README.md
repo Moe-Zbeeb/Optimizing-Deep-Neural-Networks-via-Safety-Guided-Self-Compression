@@ -150,7 +150,7 @@ Here’s a table summarizing the performance and model size with and without qua
 ---    
 
 **Note** : The improvement beyond the baseline suggests that removing unimportant kernels while restoring critical ones helped the model reduce variance and better focus on key features, resulting in a performance boost closer to human-level 
-accuracy which is about 99.87%  
+accuracy on mnist which is about 99.87%  
 
 ---   
 
