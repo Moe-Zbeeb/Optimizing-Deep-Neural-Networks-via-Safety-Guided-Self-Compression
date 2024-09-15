@@ -147,6 +147,5 @@ accuracy which is about 99.87%
 
 Mohammad Bazzi, mab101@mail.aub.edu  
 Mariam Salman, mcs12@mail.aub.edu  
-
-Mohammad Zbeeb, mhmdzbyb829@gmail.com 
+Mohammad Zbeeb, mbz02@mail.aub.edu
 
