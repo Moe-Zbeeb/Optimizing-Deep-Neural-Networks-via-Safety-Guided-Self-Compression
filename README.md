@@ -8,7 +8,7 @@ This project explores a **simple and general neural network weight compression a
 
 **Note2**  : This work is built upon Self-Compressing Neural Networks by Szabolcs Cséfalvay szabolcs.csefalvay@imgtec.com James Imber james.imber@imgtec.com   
 
-**Note3**  : Scalability is proved by S CALABLE M ODEL C OMPRESSION BY ENTROPY PENALIZED REPARAMETERIZATION Deniz Oktay doktay@cs.princeton.edu 
+**Note3**  : Scalability is proved by SCALABLE MODEL COMPRESSION BY ENTROPY PENALIZED REPARAMETERIZATION Deniz Oktay doktay@cs.princeton.edu 
 
 ---
 
