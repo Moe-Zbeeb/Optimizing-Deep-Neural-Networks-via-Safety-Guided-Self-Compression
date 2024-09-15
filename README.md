@@ -122,11 +122,17 @@ Where:
 
 3. **Pseudocode**
    Pass the safety set and log its accuracy.
+   
    Pass the training examples to update model weights.
+   
    Update the network parameters, including b (bit depth) and e (scaling factor).
+   
    Quantize the model to reduce its size.
+   
    Pass the safety set again and log the updated accuracy.
+   
    If the accuracy drop exceeds a predefined threshold, restore some kernels to their original half-precision.
+   
    Repeat the process for further iterations, adjusting as necessary.
 ---
 Here’s a table summarizing the performance and model size with and without quantization, including unsafe and safety-driven quantization:
