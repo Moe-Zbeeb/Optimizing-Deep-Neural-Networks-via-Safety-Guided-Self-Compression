@@ -143,8 +143,10 @@ Here’s a table summarizing the performance and model size with and without qua
 **Note** : The improvement beyond the baseline suggests that removing unimportant kernels while restoring critical ones helped the model reduce variance and better focus on key features, resulting in a performance boost closer to human-level 
 accuracy which is about 99.87%  
 
---- 
+---   
+
 Mohammad Bazzi, mab101@mail.aub.edu  
-Mariam Salman, mcs12@mail.aub.edu 
+Mariam Salman, mcs12@mail.aub.edu  
+
 Mohammad Zbeeb, mhmdzbyb829@gmail.com 
 
