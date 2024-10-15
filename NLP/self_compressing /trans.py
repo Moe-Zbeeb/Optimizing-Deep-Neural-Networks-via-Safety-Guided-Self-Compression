@@ -1,7 +1,6 @@
 # Import necessary libraries
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import random
 import copy
@@ -58,6 +57,7 @@ def load_preservation_set(file_path):
         preservation_words = [line.strip().lower() for line in f]
     return preservation_words
 
+# Ensure that 'hardest_examples.txt' exists in your directory
 preservation_words = load_preservation_set('hardest_examples.txt')
 X_pres, Y_pres = build_dataset(preservation_words, block_size)
 print(f"Preservation set: {X_pres.shape}, {Y_pres.shape}")
@@ -95,24 +95,22 @@ class TransformerModel(nn.Module):
         logits = self.fc_out(x[:, -1, :])  # Predict next token
         return logits
 
-# Initialize the model
-embed_size = 128
-num_heads = 8
-num_layers = 4
-dropout = 0.1
+# Function to calculate the size of a model in bytes
+def calculate_model_size(model):
+    total_size = 0
+    for param in model.parameters():
+        total_size += param.numel() * param.element_size()
+    return total_size
 
-model = TransformerModel(
-    vocab_size=vocab_size,
-    embed_size=embed_size,
-    num_heads=num_heads,
-    num_layers=num_layers,
-    block_size=block_size,
-    dropout=dropout
-)
-
-# Define optimizer and loss function
-optimizer = optim.AdamW(model.parameters(), lr=1e-3)
-criterion = nn.CrossEntropyLoss()
+# Function to simulate a training step
+def train_step(model, X_batch, Y_batch, optimizer, criterion):
+    model.train()
+    optimizer.zero_grad()
+    logits = model(X_batch)
+    loss = criterion(logits, Y_batch)
+    loss.backward()
+    optimizer.step()
+    return loss.item()
 
 # Function to evaluate accuracy
 def evaluate_accuracy(model, X, Y):
@@ -132,72 +130,102 @@ def quantize_model(model, bit_depth=8):
         param.data = param.data.half()  # Convert to half precision (16-bit)
     return model_int
 
+# Function to restore kernels (attention heads) with zero bits (simulated here)
+def restore_zero_bit_kernels(model, restore_fraction=0.5):
+    restored_model = copy.deepcopy(model)
+    # Simulate restoration by converting a fraction of weights back to full precision
+    restored_params = list(restored_model.parameters())
+    total_params = len(restored_params)
+    num_restore = int(total_params * restore_fraction)
+    for param in restored_params[:num_restore]:
+        param.data = param.data.float()  # Restore precision
+    return restored_model
+
+# Initialize the model
+embed_size = 128
+num_heads = 8
+num_layers = 4
+dropout = 0.1
+
+model = TransformerModel(
+    vocab_size=vocab_size,
+    embed_size=embed_size,
+    num_heads=num_heads,
+    num_layers=num_layers,
+    block_size=block_size,
+    dropout=dropout
+)
+
+# Define optimizer and loss function
+optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+criterion = nn.CrossEntropyLoss()
+
+# Define the loop variables
+prev_safety_acc = 1.0  # Initialize with a high value (100% accuracy)
+test_accs = []  # Store test accuracies over iterations
+bytes_used = []  # Store model size in bytes after quantization
+safety_losses = []  # Store safety set loss over iterations
+
+# Parameters for the loop
+safety_acc_drop_threshold = 0.05  # Threshold for acceptable accuracy drop (e.g., 5%)
+restore_fraction = 0.5  # Fraction of kernels (attention heads, layers) to restore
+weight_count = sum(p.numel() for p in model.parameters())  # Total number of weights in the model
+max_iterations = 4000  # Number of training iterations
+
+# Simulated quantization bits (could be dynamically adjusted)
+Q = 8  # Number of bits for quantization (e.g., 8-bit quantization)
+
 # Training loop with quantization and safety set evaluation
-epochs = 5
-batch_size = 64
-loss_increase_threshold = 0.05  # 5% acceptable loss increase
-best_accuracy = 0
-patience = 2  # Number of epochs to wait before restoring precision
-no_improve_epochs = 0
+for i in range(max_iterations):
+    # Step 1: Perform a training step and calculate loss
+    idx = torch.randint(0, X_train.shape[0], (64,))  # Random batch
+    X_batch, Y_batch = X_train[idx], Y_train[idx]
+    loss = train_step(model, X_batch, Y_batch, optimizer, criterion)
+    safety_loss = loss  # Using training loss as proxy for safety loss
 
-for epoch in range(epochs):
-    # Evaluate on preservation set before training
-    preservation_accuracy_before = evaluate_accuracy(model, X_pres, Y_pres)
-    print(f"Epoch {epoch+1}, Preservation Accuracy Before Training: {preservation_accuracy_before:.4f}")
+    # Step 2: Calculate model size in bytes based on quantized bits
+    model_bytes = Q / 8 * weight_count  # Q is the number of quantization bits
 
-    model.train()
-    # Shuffle training data
-    perm = torch.randperm(X_train.size(0))
-    X_train = X_train[perm]
-    Y_train = Y_train[perm]
+    # Step 3: Every 10 iterations:
+    if i % 10 == 9:
+        # Step 3.1: Calculate test accuracy
+        test_acc = evaluate_accuracy(model, X_test, Y_test)
 
-    # Training batches
-    for i in range(0, X_train.size(0), batch_size):
-        X_batch = X_train[i:i+batch_size]
-        Y_batch = Y_train[i:i+batch_size]
+        # Step 3.2: Calculate accuracy on the preservation (safety) set
+        safety_acc = evaluate_accuracy(model, X_pres, Y_pres)
 
-        optimizer.zero_grad()
-        logits = model(X_batch)
-        loss = criterion(logits, Y_batch)
-        loss.backward()
-        optimizer.step()
+        # Step 3.3: Compute accuracy drop from the previous safety evaluation
+        acc_drop = prev_safety_acc - safety_acc
 
-    # Update quantization parameters (simulated here)
-    # For simplicity, we're not changing bit depth or scaling factor in this example
+        # Step 3.4: If the drop exceeds the threshold
+        if acc_drop > safety_acc_drop_threshold:
+            # Step 3.5: Restore kernels with zero bits (e.g., restore 50% of them)
+            model = restore_zero_bit_kernels(model, restore_fraction=restore_fraction)
+            print(f"Iteration {i+1}: Safety accuracy drop detected. Restoring {restore_fraction*100}% of kernels.")
 
-    # Quantize the model
-    quantized_model = quantize_model(model)
+        # Step 3.7: Update the previous safety accuracy to the current one
+        prev_safety_acc = safety_acc
 
-    # Evaluate on preservation set after quantization
-    preservation_accuracy_after = evaluate_accuracy(quantized_model, X_pres, Y_pres)
-    print(f"Epoch {epoch+1}, Preservation Accuracy After Quantization: {preservation_accuracy_after:.4f}")
+        # Step 4: Log test accuracy, model size, and safety loss
+        test_accs.append(test_acc)
+        bytes_used.append(model_bytes)
+        safety_losses.append(safety_loss)
 
-    # Check if accuracy drop exceeds threshold
-    accuracy_drop = preservation_accuracy_before - preservation_accuracy_after
-    if accuracy_drop > loss_increase_threshold:
-        print("Accuracy drop exceeds threshold, restoring some attention heads to higher precision.")
-        # Simulate restoring some attention heads
-        # For simplicity, we'll restore the original model
-        quantized_model = copy.deepcopy(model)
-        no_improve_epochs += 1
-        if no_improve_epochs >= patience:
-            print("No improvement after multiple epochs, stopping training.")
-            break
+        # Step 5: Print logging information
+        if i % 100 == 99:
+            print(f"Iteration {i+1}, Test Accuracy: {test_acc:.4f}, Safety Accuracy: {safety_acc:.4f}, Model Size: {model_bytes / (1024 * 1024):.4f} MB, Safety Loss: {safety_loss:.4f}")
+
     else:
-        # Update the model with quantized model
-        model = quantized_model
-        no_improve_epochs = 0
+        # Use the previous test accuracy
+        if test_accs:
+            test_acc = test_accs[-1]
+        else:
+            test_acc = 0.0
 
-    # Evaluate on validation set
-    val_accuracy = evaluate_accuracy(model, X_val, Y_val)
-    print(f"Epoch {epoch+1}, Validation Accuracy: {val_accuracy:.4f}")
+# After training, evaluate the final model on the test set
+final_test_acc = evaluate_accuracy(model, X_test, Y_test)
+print(f"Final Test Accuracy: {final_test_acc:.4f}")
 
-    # Save best model
-    if val_accuracy > best_accuracy:
-        best_accuracy = val_accuracy
-        best_model_state = copy.deepcopy(model.state_dict())
-
-# Load best model and evaluate on test set
-model.load_state_dict(best_model_state)
-test_accuracy = evaluate_accuracy(model, X_test, Y_test)
-print(f"Test Accuracy: {test_accuracy:.4f}")
+# Calculate the final model size
+final_model_size = calculate_model_size(model)
+print(f"Final Model Size: {final_model_size / (1024 * 1024):.4f} MB")
