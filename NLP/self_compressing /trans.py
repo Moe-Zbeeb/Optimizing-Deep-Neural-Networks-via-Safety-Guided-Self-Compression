@@ -1,231 +1,355 @@
-# Import necessary libraries
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import random
-import copy
-import numpy as np
+from torch.nn import functional as F
+import math
+import os
+from tqdm import trange
 
-# Set random seed for reproducibility
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
+# hyperparameters
+batch_size = 16
+block_size = 32
+max_iters = 10000
+eval_interval = 100
+learning_rate = 1e-3
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+eval_iters = 200
+n_embd = 64
+n_head = 4
+n_layer = 4
+dropout = 0.0
+# ------------
 
-# Load and preprocess the dataset
-with open('names.txt', 'r') as f:
-    words = f.read().splitlines()
+torch.manual_seed(1337)
 
-# Create character to index mappings
-chars = sorted(list(set(''.join(words))))
-stoi = {ch: i + 1 for i, ch in enumerate(chars)}  # Start indices from 1
-stoi['.'] = 0  # End-of-sequence token
-itos = {i: ch for ch, i in stoi.items()}
-vocab_size = len(stoi)
-print(f"Vocabulary size: {vocab_size}")
+# Load main text data
+with open('/home/mohammad/names.txt', 'r', encoding='utf-8') as f:
+    text = f.read()
 
-# Function to build dataset
-def build_dataset(words, block_size):
-    X, Y = [], []
-    for word in words:
-        context = [0] * block_size  # Initialize with start tokens
-        for ch in word + '.':
-            idx = stoi[ch]
-            X.append(context)
-            Y.append(idx)
-            context = context[1:] + [idx]  # Slide window
-    X = torch.tensor(X, dtype=torch.long)
-    Y = torch.tensor(Y, dtype=torch.long)
-    return X, Y
+# Load safety data
+with open('/home/mohammad/hardest_examples.txt', 'r', encoding='utf-8') as f:
+    safety_text = f.read()
 
-# Split data into training, validation, and test sets
-random.shuffle(words)
-n1 = int(0.8 * len(words))
-n2 = int(0.9 * len(words))
-block_size = 8
+# Here are all the unique characters that occur in both texts
+chars = sorted(list(set(text + safety_text)))
+vocab_size = len(chars)
 
-X_train, Y_train = build_dataset(words[:n1], block_size)
-X_val, Y_val = build_dataset(words[n1:n2], block_size)
-X_test, Y_test = build_dataset(words[n2:], block_size)
+# Create a mapping from characters to integers
+stoi = {ch: i for i, ch in enumerate(chars)}
+itos = {i: ch for i, ch in enumerate(chars)}
+encode = lambda s: [stoi[c] for c in s if c in stoi]  # encoder function
+decode = lambda l: ''.join([itos[i] for i in l])       # decoder function
 
-print(f"Training set: {X_train.shape}, {Y_train.shape}")
-print(f"Validation set: {X_val.shape}, {Y_val.shape}")
-print(f"Test set: {X_test.shape}, {Y_test.shape}")
+# Encode the datasets
+data = torch.tensor(encode(text), dtype=torch.long)
+safety_data = torch.tensor(encode(safety_text), dtype=torch.long)
 
-# Load preservation (safety) set
-def load_preservation_set(file_path):
-    with open(file_path, 'r') as f:
-        preservation_words = [line.strip().lower() for line in f]
-    return preservation_words
+# Split data into training and validation sets
+n = int(0.9 * len(data))
+train_data = data[:n]
+val_data = data[n:]
 
-# Ensure that 'hardest_examples.txt' exists in your directory
-preservation_words = load_preservation_set('hardest_examples.txt')
-X_pres, Y_pres = build_dataset(preservation_words, block_size)
-print(f"Preservation set: {X_pres.shape}, {Y_pres.shape}")
+# Data loading functions
+def get_batch(split):
+    data_split = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data_split) - block_size, (batch_size,))
+    x = torch.stack([data_split[i:i+block_size] for i in ix])
+    y = torch.stack([data_split[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
+    return x, y
 
-# Define the Transformer model
-class TransformerModel(nn.Module):
-    def __init__(self, vocab_size, embed_size, num_heads, num_layers, block_size, dropout=0.1):
-        super(TransformerModel, self).__init__()
-        self.token_embedding = nn.Embedding(vocab_size, embed_size)
-        self.position_embedding = nn.Embedding(block_size, embed_size)
-        self.embed_size = embed_size
-        self.block_size = block_size
+def get_safety_batch():
+    ix = torch.randint(len(safety_data) - block_size, (batch_size,))
+    x = torch.stack([safety_data[i:i+block_size] for i in ix])
+    y = torch.stack([safety_data[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
+    return x, y
 
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_size,
-            nhead=num_heads,
-            dim_feedforward=embed_size * 4,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.ln = nn.LayerNorm(embed_size)
-        self.fc_out = nn.Linear(embed_size, vocab_size)
+# Estimate loss on training and validation sets
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+
+# Define the quantized linear layer
+class QLinear(nn.Module):
+    def __init__(self, in_features, out_features, bias=True):
+        super(QLinear, self).__init__()
+        scale = 1 / math.sqrt(in_features)
+        self.weight = nn.Parameter(torch.empty(out_features, in_features).uniform_(-scale, scale))
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_features))
+        else:
+            self.register_parameter('bias', None)
+        self.e = nn.Parameter(torch.full((out_features, 1), -8.))
+        self.b = nn.Parameter(torch.full((out_features, 1), 32.))  # Start with 32 bits
+
+    def qbits(self):
+        return self.b.relu().sum() * self.weight.shape[1]
+
+    def qweight(self):
+        b_rel = self.b.relu()
+        min_val = torch.where(b_rel > 0, -2 ** (b_rel - 1), torch.zeros_like(b_rel))
+        max_val = torch.where(b_rel > 0, 2 ** (b_rel - 1) - 1, torch.zeros_like(b_rel))
+        scaled_weight = 2 ** -self.e * self.weight
+        qweight = torch.max(torch.min(scaled_weight, max_val), min_val)
+        return qweight
+
+    def forward(self, input):
+        qw = self.qweight()
+        w = (qw.round() - qw).detach() + qw  # Straight-through estimator
+        output = nn.functional.linear(input, 2 ** self.e * w, self.bias)
+        return output
+
+# Define the Head class with quantized linear layers
+class Head(nn.Module):
+    """ One head of self-attention """
+
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = QLinear(n_embd, head_size, bias=False)
+        self.query = QLinear(n_embd, head_size, bias=False)
+        self.value = QLinear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout)
+
+    def qbits(self):
+        return self.key.qbits() + self.query.qbits() + self.value.qbits()
 
     def forward(self, x):
-        B, T = x.shape
-        assert T <= self.block_size, "Input sequence length exceeds block size"
-        token_embeddings = self.token_embedding(x)  # (B, T, embed_size)
-        position_ids = torch.arange(T, device=x.device).unsqueeze(0).expand(B, T)
-        position_embeddings = self.position_embedding(position_ids)
-        x = token_embeddings + position_embeddings  # (B, T, embed_size)
-        x = self.transformer(x)
-        x = self.ln(x)
-        logits = self.fc_out(x[:, -1, :])  # Predict next token
-        return logits
+        B, T, C = x.shape
+        k = self.key(x)   # (B,T,head_size)
+        q = self.query(x) # (B,T,head_size)
+        # Compute attention scores ("affinities")
+        wei = q @ k.transpose(-2, -1) * C ** -0.5  # (B,T,T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
+        # Perform the weighted aggregation of the values
+        v = self.value(x)  # (B,T,head_size)
+        out = wei @ v      # (B,T,head_size)
+        return out
 
-# Function to calculate the size of a model in bytes
-def calculate_model_size(model):
-    total_size = 0
-    for param in model.parameters():
-        total_size += param.numel() * param.element_size()
-    return total_size
+# Define MultiHeadAttention with quantized projection
+class MultiHeadAttention(nn.Module):
+    """ Multiple heads of self-attention in parallel """
 
-# Function to simulate a training step
-def train_step(model, X_batch, Y_batch, optimizer, criterion):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = QLinear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def qbits(self):
+        return sum(h.qbits() for h in self.heads) + self.proj.qbits()
+
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.dropout(self.proj(out))
+        return out
+
+# Define FeedForward with quantized linear layers
+class FeedForward(nn.Module):
+    """ A simple linear layer followed by a non-linearity """
+
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            QLinear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            QLinear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def qbits(self):
+        return sum(layer.qbits() for layer in self.net if isinstance(layer, QLinear))
+
+    def forward(self, x):
+        return self.net(x)
+
+# Define Transformer Block with quantization
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
+
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def qbits(self):
+        return self.sa.qbits() + self.ffwd.qbits()
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+# Define the BigramLanguageModel with quantization
+class BigramLanguageModel(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
+        self.lm_head = QLinear(n_embd, vocab_size)
+
+    def qbits(self):
+        qbits = 0
+        qbits += sum(b.qbits() for b in self.blocks)
+        qbits += self.lm_head.qbits()
+        return qbits
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T,C)
+        x = tok_emb + pos_emb  # (B,T,C)
+        x = self.blocks(x)     # (B,T,C)
+        x = self.ln_f(x)       # (B,T,C)
+        logits = self.lm_head(x)  # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape      
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # Crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:] 
+            # Get the predictions
+            logits, _ = self(idx_cond)
+            # Focus only on the last time step
+            logits = logits[:, -1, :]  # becomes (B, C)
+            # Apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)  # (B, C)
+            # Sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            # Append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+        return idx
+
+# Instantiate the model and optimizer
+model = BigramLanguageModel().to(device)
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+print(f"Total parameters: {sum(p.numel() for p in model.parameters())/1e6:.2f}M")
+
+# Compute total weight count for compression calculations
+total_weight_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+# Initialize lists to track model size
+model_size_history = []  # To store model size at each eval interval
+iteration_history = []   # To store corresponding iterations
+
+# Functions to check and restore zero-bit attention heads
+def check_zero_bit_heads():
+    for block in model.blocks:
+        if isinstance(block, Block):
+            for h in block.sa.heads:
+                for layer in [h.key, h.query, h.value]:
+                    if (layer.b.view(-1) <= 0).any():
+                        return True
+    return False
+
+def restore_zero_bit_heads(restore_fraction=0.1):
+    for block in model.blocks:
+        if isinstance(block, Block):
+            for h in block.sa.heads:
+                for layer in [h.key, h.query, h.value]:
+                    b_flat = layer.b.view(-1)
+                    zero_bit_indices = (b_flat <= 0).nonzero(as_tuple=False).view(-1)
+                    num_restore = int(restore_fraction * len(zero_bit_indices))
+                    if num_restore > 0:
+                        restore_indices = zero_bit_indices[torch.randperm(len(zero_bit_indices))[:num_restore]]
+                        b_flat[restore_indices] = 2.0  # Restore bits to 2
+
+# Variables for tracking
+prev_safety_loss = None
+safety_loss_increase_threshold = 0.1  # Adjust as needed
+
+# Training loop
+for iter in trange(max_iters):
+    # Training step
     model.train()
     optimizer.zero_grad()
-    logits = model(X_batch)
-    loss = criterion(logits, Y_batch)
+
+    # Main training batch
+    xb, yb = get_batch('train')
+    logits, loss_main = model(xb, yb)
+    Q = model.qbits() / total_weight_count
+
+    # Compression regularization weight
+    compression_weight = 0.1  # Adjust as needed
+    loss = loss_main + compression_weight * Q
+
+    # Safety loss
+    xs, ys = get_safety_batch()
+    logits_safety, safety_loss = model(xs, ys)
+    safety_weight = 0.05  # Adjust as needed
+    loss = loss + safety_weight * safety_loss
+
     loss.backward()
     optimizer.step()
-    return loss.item()
 
-# Function to evaluate accuracy
-def evaluate_accuracy(model, X, Y):
-    model.eval()
-    with torch.no_grad():
-        logits = model(X)
-        preds = torch.argmax(logits, dim=1)
-        correct = (preds == Y).float().sum()
-        accuracy = correct / Y.shape[0]
-    return accuracy.item()
+    # Every eval_interval steps, check validation and safety loss, and log model size
+    if iter % eval_interval == 0 or iter == max_iters - 1:
+        model.eval()
+        losses = estimate_loss()
+        
+        # Calculate current model size in bits and megabytes
+        current_qbits = model.qbits()
+        current_size_bytes = current_qbits / 8
+        current_size_mb = current_size_bytes / 1e6
 
-# Function to quantize the model
-def quantize_model(model, bit_depth=8):
-    model_int = copy.deepcopy(model)
-    # Simulate quantization by reducing precision of weights
-    for param in model_int.parameters():
-        param.data = param.data.half()  # Convert to half precision (16-bit)
-    return model_int
+        # Append to history
+        model_size_history.append(current_size_mb)
+        iteration_history.append(iter)
 
-# Function to restore kernels (attention heads) with zero bits (simulated here)
-def restore_zero_bit_kernels(model, restore_fraction=0.5):
-    restored_model = copy.deepcopy(model)
-    # Simulate restoration by converting a fraction of weights back to full precision
-    restored_params = list(restored_model.parameters())
-    total_params = len(restored_params)
-    num_restore = int(total_params * restore_fraction)
-    for param in restored_params[:num_restore]:
-        param.data = param.data.float()  # Restore precision
-    return restored_model
+        # Log the information
+        print(f"Step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, "
+              f"safety loss {safety_loss:.4f}, Q: {Q:.4f}, "
+              f"Model Size: {current_size_mb:.6f} MB")
 
-# Initialize the model
-embed_size = 128
-num_heads = 8
-num_layers = 4
-dropout = 0.1
+        # Restore zero-bit heads if safety loss increases too much
+        if prev_safety_loss is not None and (safety_loss - prev_safety_loss) > safety_loss_increase_threshold:
+            if check_zero_bit_heads():
+                restore_zero_bit_heads(restore_fraction=0.1)
+        prev_safety_loss = safety_loss
 
-model = TransformerModel(
-    vocab_size=vocab_size,
-    embed_size=embed_size,
-    num_heads=num_heads,
-    num_layers=num_layers,
-    block_size=block_size,
-    dropout=dropout
-)
+# Optional: Plot the model size over iterations
+try:
+    import matplotlib.pyplot as plt
 
-# Define optimizer and loss function
-optimizer = optim.AdamW(model.parameters(), lr=1e-3)
-criterion = nn.CrossEntropyLoss()
-
-# Define the loop variables
-prev_safety_acc = 1.0  # Initialize with a high value (100% accuracy)
-test_accs = []  # Store test accuracies over iterations
-bytes_used = []  # Store model size in bytes after quantization
-safety_losses = []  # Store safety set loss over iterations
-
-# Parameters for the loop
-safety_acc_drop_threshold = 0.05  # Threshold for acceptable accuracy drop (e.g., 5%)
-restore_fraction = 0.5  # Fraction of kernels (attention heads, layers) to restore
-weight_count = sum(p.numel() for p in model.parameters())  # Total number of weights in the model
-max_iterations = 4000  # Number of training iterations
-
-# Simulated quantization bits (could be dynamically adjusted)
-Q = 8  # Number of bits for quantization (e.g., 8-bit quantization)
-
-# Training loop with quantization and safety set evaluation
-for i in range(max_iterations):
-    # Step 1: Perform a training step and calculate loss
-    idx = torch.randint(0, X_train.shape[0], (64,))  # Random batch
-    X_batch, Y_batch = X_train[idx], Y_train[idx]
-    loss = train_step(model, X_batch, Y_batch, optimizer, criterion)
-    safety_loss = loss  # Using training loss as proxy for safety loss
-
-    # Step 2: Calculate model size in bytes based on quantized bits
-    model_bytes = Q / 8 * weight_count  # Q is the number of quantization bits
-
-    # Step 3: Every 10 iterations:
-    if i % 10 == 9:
-        # Step 3.1: Calculate test accuracy
-        test_acc = evaluate_accuracy(model, X_test, Y_test)
-
-        # Step 3.2: Calculate accuracy on the preservation (safety) set
-        safety_acc = evaluate_accuracy(model, X_pres, Y_pres)
-
-        # Step 3.3: Compute accuracy drop from the previous safety evaluation
-        acc_drop = prev_safety_acc - safety_acc
-
-        # Step 3.4: If the drop exceeds the threshold
-        if acc_drop > safety_acc_drop_threshold:
-            # Step 3.5: Restore kernels with zero bits (e.g., restore 50% of them)
-            model = restore_zero_bit_kernels(model, restore_fraction=restore_fraction)
-            print(f"Iteration {i+1}: Safety accuracy drop detected. Restoring {restore_fraction*100}% of kernels.")
-
-        # Step 3.7: Update the previous safety accuracy to the current one
-        prev_safety_acc = safety_acc
-
-        # Step 4: Log test accuracy, model size, and safety loss
-        test_accs.append(test_acc)
-        bytes_used.append(model_bytes)
-        safety_losses.append(safety_loss)
-
-        # Step 5: Print logging information
-        if i % 100 == 99:
-            print(f"Iteration {i+1}, Test Accuracy: {test_acc:.4f}, Safety Accuracy: {safety_acc:.4f}, Model Size: {model_bytes / (1024 * 1024):.4f} MB, Safety Loss: {safety_loss:.4f}")
-
-    else:
-        # Use the previous test accuracy
-        if test_accs:
-            test_acc = test_accs[-1]
-        else:
-            test_acc = 0.0
-
-# After training, evaluate the final model on the test set
-final_test_acc = evaluate_accuracy(model, X_test, Y_test)
-print(f"Final Test Accuracy: {final_test_acc:.4f}")
-
-# Calculate the final model size
-final_model_size = calculate_model_size(model)
-print(f"Final Model Size: {final_model_size / (1024 * 1024):.4f} MB")
+    plt.figure(figsize=(10, 6))
+    plt.plot(iteration_history, model_size_history, label='Model Size (MB)')
+    plt.xlabel('Iteration')
+    plt.ylabel('Model Size (MB)')
+    plt.title('Model Size Over Training Iterations')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+except ImportError:
+    print("matplotlib is not installed. Skipping the plot of model size history.")
+    # Alternatively, you can save the history to a file or handle it as needed

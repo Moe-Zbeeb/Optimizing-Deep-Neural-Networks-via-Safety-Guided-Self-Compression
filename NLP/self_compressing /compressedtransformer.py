@@ -1,353 +1,213 @@
-# Import necessary libraries
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import random
-import copy
-import numpy as np
-import matplotlib.pyplot as plt
+from torch.nn import functional as F
+from tqdm import trange
 
-# Set random seed for reproducibility
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
+# hyperparameters
+batch_size = 16
+block_size = 32
+max_iters = 5000
+eval_interval = 100
+learning_rate = 1e-3
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+eval_iters = 200
+n_embd = 64
+n_head = 4
+n_layer = 4
+dropout = 0.0
+# ------------
 
-# Load and preprocess the dataset
-with open('names.txt', 'r') as f:
-    words = f.read().splitlines()
+torch.manual_seed(1337)
 
-# Create character to index mappings
-chars = sorted(list(set(''.join(words))))
-stoi = {ch: i + 1 for i, ch in enumerate(chars)}  # Start indices from 1
-stoi['.'] = 0  # End-of-sequence token
-itos = {i: ch for ch, i in stoi.items()}
-vocab_size = len(stoi)
-print(f"Vocabulary size: {vocab_size}")
+# Load main text data
+with open('/home/mohammad/names.txt', 'r', encoding='utf-8') as f:
+    text = f.read()
 
-# Function to build dataset
-def build_dataset(words, block_size):
-    X, Y = [], []
-    for word in words:
-        context = [0] * block_size  # Initialize with start tokens
-        for ch in word + '.':
-            idx = stoi[ch]
-            X.append(context)
-            Y.append(idx)
-            context = context[1:] + [idx]  # Slide window
-    X = torch.tensor(X, dtype=torch.long)
-    Y = torch.tensor(Y, dtype=torch.long)
-    return X, Y
+# Here are all the unique characters that occur in the text
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
 
-# Split data into training, validation, and test sets
-random.shuffle(words)
-n1 = int(0.8 * len(words))
-n2 = int(0.9 * len(words))
-block_size = 8
+# Create a mapping from characters to integers
+stoi = {ch: i for i, ch in enumerate(chars)}
+itos = {i: ch for i, ch in enumerate(chars)}
+encode = lambda s: [stoi[c] for c in s if c in stoi]  # encoder function
+decode = lambda l: ''.join([itos[i] for i in l])       # decoder function
 
-X_train, Y_train = build_dataset(words[:n1], block_size)
-X_val, Y_val = build_dataset(words[n1:n2], block_size)
-X_test, Y_test = build_dataset(words[n2:], block_size)
+# Encode the datasets
+data = torch.tensor(encode(text), dtype=torch.long)
 
-print(f"Training set: {X_train.shape}, {Y_train.shape}")
-print(f"Validation set: {X_val.shape}, {Y_val.shape}")
-print(f"Test set: {X_test.shape}, {Y_test.shape}")
+# Split data into training and validation sets
+n = int(0.9 * len(data))
+train_data = data[:n]
+val_data = data[n:]
 
-# Load preservation (safety) set
-def load_preservation_set(file_path):
-    with open(file_path, 'r') as f:
-        preservation_words = [line.strip().lower() for line in f]
-    return preservation_words
+# Data loading functions
+def get_batch(split):
+    data_split = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data_split) - block_size, (batch_size,))
+    x = torch.stack([data_split[i:i+block_size] for i in ix])
+    y = torch.stack([data_split[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
+    return x, y
 
-# Ensure that 'hardest_examples.txt' exists in your directory
-preservation_words = load_preservation_set('hardest_examples.txt')
-X_pres, Y_pres = build_dataset(preservation_words, block_size)
-print(f"Preservation set: {X_pres.shape}, {Y_pres.shape}")
+# Estimate loss on training and validation sets
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
-# Define the quantization function
-def quantize(x, b, e):
-    # x: input tensor
-    # b: bit depth (must be >=1)
-    # e: scaling factor
-    x_scaled = x / (2 ** e)
-    x_clipped = torch.clamp(x_scaled, -2 ** (b - 1), 2 ** (b - 1) - 1)
-    x_quantized = torch.floor(x_clipped)
-    x_dequantized = x_quantized * (2 ** e)
-    return x_dequantized
+# Define the Head class without quantization
+class Head(nn.Module):
+    """ One head of self-attention """
 
-# Define custom MultiheadAttention with quantization
-class QuantizedMultiheadAttention(nn.Module):
-    def __init__(self, embed_size, num_heads):
-        super(QuantizedMultiheadAttention, self).__init__()
-        assert embed_size % num_heads == 0, "Embedding size must be divisible by number of heads"
-        self.embed_size = embed_size
-        self.num_heads = num_heads
-        self.head_dim = embed_size // num_heads
-
-        # Initialize weight matrices for query, key, and value
-        self.q_linear = nn.Linear(embed_size, embed_size)
-        self.k_linear = nn.Linear(embed_size, embed_size)
-        self.v_linear = nn.Linear(embed_size, embed_size)
-        self.fc_out = nn.Linear(embed_size, embed_size)
-
-        # Initialize learnable parameters b and e for quantization
-        self.b = nn.Parameter(torch.tensor(8.0))  # Start with 8 bits
-        self.e = nn.Parameter(torch.tensor(0.0))  # Start with scaling factor 0
-
-    def forward(self, values, keys, query):
-        N, T, _ = query.size()
-
-        # Linear projections
-        queries = self.q_linear(query)
-        keys = self.k_linear(keys)
-        values = self.v_linear(values)
-
-        # Split into multiple heads
-        queries = queries.view(N, T, self.num_heads, self.head_dim).transpose(1, 2)
-        keys = keys.view(N, T, self.num_heads, self.head_dim).transpose(1, 2)
-        values = values.view(N, T, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # Apply quantization to attention heads
-        b = torch.clamp(self.b, min=1.0, max=8.0)
-        e = self.e
-        queries = quantize(queries, b, e)
-        keys = quantize(keys, b, e)
-        values = quantize(values, b, e)
-
-        # Calculate attention scores
-        energy = torch.matmul(queries, keys.transpose(-2, -1)) / (self.embed_size ** (1/2))
-        attention = torch.softmax(energy, dim=-1)
-
-        # Get context
-        out = torch.matmul(attention, values)
-        out = out.transpose(1, 2).contiguous().view(N, T, self.embed_size)
-
-        # Final linear layer
-        out = self.fc_out(out)
-
-        return out
-
-# Define the Transformer model
-class TransformerModel(nn.Module):
-    def __init__(self, vocab_size, embed_size, num_heads, num_layers, block_size, dropout=0.1):
-        super(TransformerModel, self).__init__()
-        self.token_embedding = nn.Embedding(vocab_size, embed_size)
-        self.position_embedding = nn.Embedding(block_size, embed_size)
-        self.embed_size = embed_size
-        self.block_size = block_size
-        self.layers = nn.ModuleList([
-            nn.ModuleDict({
-                'attn': QuantizedMultiheadAttention(embed_size, num_heads),
-                'ln1': nn.LayerNorm(embed_size),
-                'ff': nn.Sequential(
-                    nn.Linear(embed_size, embed_size * 4),
-                    nn.GELU(),
-                    nn.Linear(embed_size * 4, embed_size),
-                    nn.Dropout(dropout)
-                ),
-                'ln2': nn.LayerNorm(embed_size)
-            }) for _ in range(num_layers)
-        ])
-        self.ln_f = nn.LayerNorm(embed_size)
-        self.fc_out = nn.Linear(embed_size, vocab_size)
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        B, T = x.shape
-        assert T <= self.block_size, "Input sequence length exceeds block size"
-        token_embeddings = self.token_embedding(x)  # (B, T, embed_size)
-        position_ids = torch.arange(T, device=x.device).unsqueeze(0).expand(B, T)
-        position_embeddings = self.position_embedding(position_ids)
-        x = token_embeddings + position_embeddings  # (B, T, embed_size)
+        B, T, C = x.shape
+        k = self.key(x)   # (B,T,head_size)
+        q = self.query(x) # (B,T,head_size)
+        # Compute attention scores ("affinities")
+        wei = q @ k.transpose(-2, -1) * C ** -0.5  # (B,T,T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
+        # Perform the weighted aggregation of the values
+        v = self.value(x)  # (B,T,head_size)
+        out = wei @ v      # (B,T,head_size)
+        return out
 
-        for layer in self.layers:
-            attn = layer['attn'](x, x, x)
-            x = x + attn
-            x = layer['ln1'](x)
-            ff = layer['ff'](x)
-            x = x + ff
-            x = layer['ln2'](x)
+# Define MultiHeadAttention without quantization
+class MultiHeadAttention(nn.Module):
+    """ Multiple heads of self-attention in parallel """
 
-        x = self.ln_f(x)
-        logits = self.fc_out(x[:, -1, :])  # Predict next token
-        return logits
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
 
-    def get_quantization_params(self):
-        b_list = []
-        e_list = []
-        for layer in self.layers:
-            b_list.append(layer['attn'].b)
-            e_list.append(layer['attn'].e)
-        return b_list, e_list
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.dropout(self.proj(out))
+        return out
 
-# Function to calculate the size of a model in bytes
-def calculate_model_size(model):
-    total_size = 0
-    for param in model.parameters():
-        total_size += param.numel() * param.element_size()
-    return total_size
+# Define FeedForward without quantization
+class FeedForward(nn.Module):
+    """ A simple linear layer followed by a non-linearity """
 
-# Define custom loss function
-def custom_loss_function(model, logits, targets, factor, preservation_loss):
-    # Cross-entropy loss
-    ce_loss = nn.CrossEntropyLoss()(logits, targets)
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
 
-    # Regularization term proportional to model size
-    b_list, _ = model.get_quantization_params()
-    model_size = 0
-    for b in b_list:
-        model_size += b.mean()
-    reg_loss = factor * model_size
+    def forward(self, x):
+        return self.net(x)
 
-    # Total loss
-    total_loss = ce_loss + reg_loss + preservation_loss
-    return total_loss
+# Define Transformer Block without quantization
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
 
-# Function to calculate preservation loss
-def compute_preservation_loss(model, X_pres, Y_pres):
-    model.eval()
-    with torch.no_grad():
-        logits = model(X_pres)
-        loss = nn.CrossEntropyLoss()(logits, Y_pres)
-    model.train()
-    return loss
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
 
-# Function to quantize the model
-def quantize_model(model):
-    for layer in model.layers:
-        attn = layer['attn']
-        b = torch.clamp(attn.b, min=1.0, max=8.0)
-        e = attn.e
-        # Quantize the weights
-        with torch.no_grad():
-            attn.q_linear.weight.data = quantize(attn.q_linear.weight.data, b, e)
-            attn.k_linear.weight.data = quantize(attn.k_linear.weight.data, b, e)
-            attn.v_linear.weight.data = quantize(attn.v_linear.weight.data, b, e)
-            attn.fc_out.weight.data = quantize(attn.fc_out.weight.data, b, e)
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
 
-# Function to restore kernels (attention heads) to half-precision
-def restore_attention_heads(model, restore_fraction=0.5):
-    num_layers = len(model.layers)
-    num_restore = int(num_layers * restore_fraction)
-    for layer in model.layers[:num_restore]:
-        attn = layer['attn']
-        # Restore b to 16 bits (simulate half-precision)
-        with torch.no_grad():
-            attn.b.data = torch.tensor(16.0)
+# Define the BigramLanguageModel without quantization
+class BigramLanguageModel(nn.Module):
 
-# Function to simulate a training step
-def train_step(model, X_batch, Y_batch, optimizer, factor, X_pres, Y_pres):
+    def __init__(self):
+        super().__init__()
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T,C)
+        x = tok_emb + pos_emb  # (B,T,C)
+        x = self.blocks(x)     # (B,T,C)
+        x = self.ln_f(x)       # (B,T,C)
+        logits = self.lm_head(x)  # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape      
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # Crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:] 
+            # Get the predictions
+            logits, _ = self(idx_cond)
+            # Focus only on the last time step
+            logits = logits[:, -1, :]  # becomes (B, C)
+            # Apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)  # (B, C)
+            # Sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            # Append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+        return idx
+
+# Instantiate the model and optimizer
+model = BigramLanguageModel().to(device)
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+print(f"Total parameters: {sum(p.numel() for p in model.parameters())/1e6:.2f}M")
+
+# Training loop
+for iter in trange(max_iters):
+    # Every eval_interval steps, check validation loss
+    if iter % eval_interval == 0 or iter == max_iters - 1:
+        losses = estimate_loss()
+        print(f"Step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+    
+    # Training step
+    xb, yb = get_batch('train')
     optimizer.zero_grad()
-    logits = model(X_batch)
-    # Compute preservation loss
-    preservation_loss = compute_preservation_loss(model, X_pres, Y_pres)
-    # Compute total loss
-    loss = custom_loss_function(model, logits, Y_batch, factor, preservation_loss)
+    logits, loss = model(xb, yb)
     loss.backward()
     optimizer.step()
-    return loss.item(), preservation_loss.item()
 
-# Function to evaluate accuracy
-def evaluate_accuracy(model, X, Y):
-    model.eval()
-    with torch.no_grad():
-        logits = model(X)
-        preds = torch.argmax(logits, dim=1)
-        correct = (preds == Y).float().sum()
-        accuracy = correct / Y.shape[0]
-    model.train()
-    return accuracy.item()
-
-# Initialize the model
-embed_size = 128
-num_heads = 8
-num_layers = 4
-dropout = 0.1
-
-model = TransformerModel(
-    vocab_size=vocab_size,
-    embed_size=embed_size,
-    num_heads=num_heads,
-    num_layers=num_layers,
-    block_size=block_size,
-    dropout=dropout
-)
-
-# Define optimizer and loss function
-optimizer = optim.AdamW(model.parameters(), lr=1e-3)
-factor = 1e-4  # Regularization factor
-
-# Define the loop variables
-prev_preservation_loss = float('inf')  # Initialize with a high value
-test_accs = []  # Store test accuracies over iterations
-model_sizes = []  # Store model size after quantization
-preservation_losses = []  # Store preservation set loss over iterations
-
-# Parameters for the loop
-preservation_loss_threshold = 0.1   # Threshold for acceptable loss increase
-restore_fraction = 0.5  # Fraction of attention heads to restore
-max_iterations = 4000  # Number of training iterations
-
-# Training loop with quantization and preservation set evaluation
-for i in range(max_iterations):
-    # Step 1: Perform a training step and calculate loss
-    idx = torch.randint(0, X_train.shape[0], (64,))  # Random batch
-    X_batch, Y_batch = X_train[idx], Y_train[idx]
-    loss, preservation_loss = train_step(model, X_batch, Y_batch, optimizer, factor, X_pres, Y_pres)
-
-    # Step 2: Quantize the attention heads after each weight update
-    quantize_model(model)
-
-    # Step 3: Periodically evaluate and adjust
-    if i % 10 == 9:
-        # Evaluate the model on the preservation set
-        current_preservation_loss = compute_preservation_loss(model, X_pres, Y_pres)
-
-        # If the preservation loss increases beyond a defined threshold after quantization
-        loss_increase = current_preservation_loss - prev_preservation_loss
-        if loss_increase > preservation_loss_threshold:
-            # Restore some attention heads to their original half-precision
-            restore_attention_heads(model, restore_fraction)
-            print(f"Iteration {i+1}: Preservation loss increased by {loss_increase:.4f}. Restoring {restore_fraction*100}% of attention heads.")
-
-        # Otherwise, keep the quantized model
-        prev_preservation_loss = current_preservation_loss
-
-        # Evaluate test accuracy
-        test_acc = evaluate_accuracy(model, X_test, Y_test)
-
-        # Calculate model size
-        model_size = calculate_model_size(model)
-
-        # Logging
-        test_accs.append(test_acc)
-        model_sizes.append(model_size)
-        preservation_losses.append(current_preservation_loss.item())
-
-        if i % 100 == 99:
-            print(f"Iteration {i+1}, Test Accuracy: {test_acc:.4f}, Preservation Loss: {current_preservation_loss:.4f}, Model Size: {model_size / (1024 * 1024):.4f} MB")
-
-# After training, evaluate the final model on the test set
-final_test_acc = evaluate_accuracy(model, X_test, Y_test)
-print(f"Final Test Accuracy: {final_test_acc:.4f}")
-
-# Calculate the final model size
-final_model_size = calculate_model_size(model)
-print(f"Final Model Size: {final_model_size / (1024 * 1024):.4f} MB")
-
-# Plotting model size over iterations
-plt.figure(figsize=(10, 4))
-plt.plot(range(len(model_sizes)), [size / (1024 * 1024) for size in model_sizes], label='Model Size (MB)')
-plt.xlabel('Evaluation Step')
-plt.ylabel('Model Size (MB)')
-plt.title('Model Size over Iterations')
-plt.legend()
-plt.show()
-
-# Plotting preservation loss over iterations
-plt.figure(figsize=(10, 4))
-plt.plot(range(len(preservation_losses)), preservation_losses, label='Preservation Loss')
-plt.xlabel('Evaluation Step')
-plt.ylabel('Preservation Loss')
-plt.title('Preservation Loss over Iterations')
-plt.legend()
-plt.show()
- 
+# Generate text from the model
+context = torch.zeros((1, 1), dtype=torch.long, device=device)
+print(decode(model.generate(context, max_new_tokens=2000)[0].tolist()))

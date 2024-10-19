@@ -186,4 +186,4 @@ def create_safety_set(model_path, save_path="safety_set_images"):
     print(f"Saved {len(top_1000_images)} images to {save_path}")
 
 # Call the function with the path to your saved model
-create_safety_set("/home/mohammad/Desktop/Safety-Driven-Self-Compressing-Neural-Networks/XAI/cnn_mnist.pth", "safety_set_images_d")
+create_safety_set("/home/mohammad/Safety-Driven-Self-Compressing-Neural-Networks/Computer Vision/XAI/cnn_mnist.pth", "safety_set_images_d")
